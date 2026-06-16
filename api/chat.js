@@ -1,6 +1,3 @@
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'anthropic/claude-haiku-4.5'
-
 const FALLBACK_REPLY =
   "The geologist is offline right now (no AI key is configured on this deployment), so I can't answer live questions yet. In the meantime, the panels above show the live Macrostrat surface units, the place fix, and—where it matches a curated region—the regional stack story for the spot you looked up."
 
@@ -76,8 +73,9 @@ export default async function handler(req, res) {
     return
   }
 
-  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
-  if (!OPENROUTER_API_KEY) {
+  const gatewayUrl = (process.env.CHAT_GATEWAY_URL || '').replace(/\/+$/, '')
+  const gatewaySecret = process.env.CHAT_GATEWAY_SECRET
+  if (!gatewayUrl || !gatewaySecret) {
     res.status(200).json({ reply: FALLBACK_REPLY, fallback: true })
     return
   }
@@ -95,38 +93,41 @@ export default async function handler(req, res) {
   const systemContent = `${SYSTEM_PROMPT}\n\nCurrent geology context:\n${buildContextBlock(context)}`
 
   try {
-    const response = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://geolayers.app',
-        'X-Title': 'GeoLayers',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 700,
-        messages: [{ role: 'system', content: systemContent }, ...chatMessages],
-      }),
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 90000)
+    let reply
+    try {
+      const response = await fetch(`${gatewayUrl}/chat`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${gatewaySecret}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ system: systemContent, messages: chatMessages }),
+        signal: controller.signal,
+      })
 
-    if (!response.ok) {
-      const error = await response.text()
-      console.error(error)
-      res.status(502).json({ error: 'The geologist could not be reached just now. Try again in a moment.' })
-      return
+      if (!response.ok) {
+        const error = await response.text()
+        console.error(error)
+        res.status(200).json({ reply: FALLBACK_REPLY, fallback: true })
+        return
+      }
+
+      const data = await response.json()
+      reply = typeof data?.reply === 'string' ? data.reply.trim() : ''
+    } finally {
+      clearTimeout(timeout)
     }
 
-    const data = await response.json()
-    const reply = data?.choices?.[0]?.message?.content?.trim()
     if (!reply) {
-      res.status(502).json({ error: 'The geologist returned an empty answer. Try rephrasing your question.' })
+      res.status(200).json({ reply: FALLBACK_REPLY, fallback: true })
       return
     }
 
     res.status(200).json({ reply })
   } catch (error) {
     console.error(error)
-    res.status(500).json({ error: 'Unable to reach the geologist right now.' })
+    res.status(200).json({ reply: FALLBACK_REPLY, fallback: true })
   }
 }
