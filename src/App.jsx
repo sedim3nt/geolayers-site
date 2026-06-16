@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 
 const COLORS = {
@@ -336,6 +336,200 @@ function FeedbackForm({ defaultLocation }) {
   )
 }
 
+function buildChatContext(result) {
+  if (!result) return null
+  return {
+    location: {
+      displayName: result.location.displayName,
+      lat: result.location.lat,
+      lng: result.location.lng,
+    },
+    units: (result.geology.units || []).slice(0, 5).map((unit) => ({
+      name: unit.name,
+      stratName: unit.stratName,
+      lith: unit.lith,
+      bestInterval: unit.bestInterval,
+      ageRange: ageRange(unit),
+      description: unit.description,
+    })),
+    narrative: result.narrative,
+    regionalStory: result.regionalStory
+      ? {
+          name: result.regionalStory.name,
+          summary: result.regionalStory.summary,
+          story: result.regionalStory.story,
+          layers: (result.regionalStory.layers || []).map((layer) => ({
+            name: layer.name,
+            age: layer.age,
+            material: layer.material,
+          })),
+        }
+      : null,
+  }
+}
+
+function GeologistChat({ context }) {
+  const [open, setOpen] = useState(false)
+  const [input, setInput] = useState('')
+  const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const contextRef = useRef(context)
+
+  useEffect(() => {
+    contextRef.current = context
+  }, [context])
+
+  const placeName = context?.location?.displayName
+
+  const send = async (event) => {
+    event.preventDefault()
+    const trimmed = input.trim()
+    if (!trimmed || loading) return
+    const nextMessages = [...messages, { role: 'user', content: trimmed }]
+    setMessages(nextMessages)
+    setInput('')
+    setError('')
+    setLoading(true)
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: nextMessages, context: contextRef.current }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'The geologist could not answer right now.')
+      setMessages((current) => [...current, { role: 'assistant', content: data.reply }])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The geologist could not answer right now.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <>
+      {open ? (
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.25 }}
+          style={{
+            position: 'fixed',
+            bottom: 96,
+            right: 24,
+            width: 'min(380px, calc(100vw - 48px))',
+            maxHeight: 'min(560px, calc(100vh - 140px))',
+            display: 'flex',
+            flexDirection: 'column',
+            background: COLORS.cream,
+            borderRadius: 22,
+            border: '1px solid rgba(34,27,27,0.1)',
+            boxShadow: '0 22px 60px rgba(73,42,26,0.24)',
+            zIndex: 60,
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ background: `linear-gradient(135deg, ${COLORS.clay}, ${COLORS.canyon})`, padding: '16px 18px', color: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', letterSpacing: '0.02em' }}>Ask the Geologist</div>
+                <div style={{ fontSize: '0.78rem', opacity: 0.9, marginTop: 2 }}>
+                  {placeName ? `Reading: ${placeName}` : 'Look up a place to ground answers'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Close chat"
+                style={{ border: 'none', background: 'rgba(255,255,255,0.18)', color: '#fff', width: 30, height: 30, borderRadius: 999, cursor: 'pointer', fontSize: '1rem', lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {messages.length === 0 ? (
+              <p style={{ color: COLORS.stone, lineHeight: 1.7, fontSize: '0.94rem' }}>
+                Ask me about the rocks under {placeName || 'this place'}, how these formations formed, geologic time, or anything else about the ground you are looking at.
+              </p>
+            ) : null}
+            {messages.map((message, index) => (
+              <div
+                key={index}
+                style={{
+                  alignSelf: message.role === 'user' ? 'flex-end' : 'flex-start',
+                  maxWidth: '85%',
+                  background: message.role === 'user' ? COLORS.ink : '#F1E6D4',
+                  color: message.role === 'user' ? '#fff' : COLORS.ink,
+                  borderRadius: 16,
+                  padding: '10px 14px',
+                  lineHeight: 1.65,
+                  fontSize: '0.94rem',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {message.content}
+              </div>
+            ))}
+            {loading ? (
+              <div style={{ alignSelf: 'flex-start', color: COLORS.stone, fontSize: '0.9rem', fontStyle: 'italic' }}>
+                Reading the rocks...
+              </div>
+            ) : null}
+            {error ? (
+              <div style={{ alignSelf: 'flex-start', color: '#9D2F2F', fontSize: '0.9rem', lineHeight: 1.6 }}>{error}</div>
+            ) : null}
+          </div>
+
+          <form onSubmit={send} style={{ display: 'flex', gap: 8, padding: 14, borderTop: '1px solid rgba(34,27,27,0.08)' }}>
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Ask about this place's geology..."
+              style={{ ...inputStyle, padding: '11px 14px', fontSize: '0.94rem' }}
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              style={{ border: 'none', borderRadius: 14, background: COLORS.canyon, color: '#fff', padding: '0 18px', fontFamily: 'var(--font-display)', cursor: 'pointer', opacity: loading || !input.trim() ? 0.6 : 1 }}
+            >
+              Send
+            </button>
+          </form>
+        </motion.div>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          position: 'fixed',
+          bottom: 24,
+          right: 24,
+          zIndex: 60,
+          border: 'none',
+          borderRadius: 999,
+          background: COLORS.ink,
+          color: '#fff',
+          padding: '14px 22px',
+          fontFamily: 'var(--font-display)',
+          fontSize: '0.95rem',
+          cursor: 'pointer',
+          boxShadow: '0 14px 34px rgba(34,27,27,0.28)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <span aria-hidden="true">⛰️</span>
+        {open ? 'Close' : 'Ask the Geologist'}
+      </button>
+    </>
+  )
+}
+
 export default function App() {
   const [query, setQuery] = useState('Moab, UT')
   const [loading, setLoading] = useState(false)
@@ -372,6 +566,7 @@ export default function App() {
 
   const primaryUnit = useMemo(() => result?.geology.units?.[0] ?? null, [result])
   const additionalUnits = useMemo(() => result?.geology.units?.slice(1, 5) ?? [], [result])
+  const chatContext = useMemo(() => buildChatContext(result), [result])
 
   return (
     <div style={{ background: COLORS.canvas, minHeight: '100vh', color: COLORS.ink }}>
@@ -547,6 +742,8 @@ export default function App() {
           </div>
         </section>
       ) : null}
+
+      <GeologistChat context={chatContext} />
     </div>
   )
 }
